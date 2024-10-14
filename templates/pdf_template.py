@@ -1,5 +1,5 @@
 import os
-from fpdf import FPDF, XPos, YPos
+from fpdf import FPDF, XPos, YPos, Template, FontFace
 from fpdf.enums import VAlign
 from colors import TailwindColors
 from datetime import datetime
@@ -32,6 +32,18 @@ pdf_document = {
     }
 }
 
+class Typography:
+    family: str
+    size: float
+    style: str
+    color: tuple
+
+
+class TemplateItem:
+    name: str 
+    type: str   #  T, L, I, B, 
+    typography: Typography
+
 
 
 class PdfTemplate(FPDF):
@@ -42,14 +54,8 @@ class PdfTemplate(FPDF):
     Inheriting classes will only affect the visuability of the content.
     Here, we will declare the very basic appearance of all templates and building blocks.
     """
-    # Some default values we use later on in this class
-    default_line_height_multiplicator = 1.4
-    # Values for the margin
-    default_marginX = 23
-    default_marginY = 10
 
-
-    def __init__(self, elements: dict=None, filename: str="", title: str="", author: str="", subject: str="", creator: str="") -> None:
+    def __init__(self, elements: dict=None, filename: str="") -> None:
         """
         Initialize the pdf file as default din4 document and take some
         required meta data.
@@ -58,25 +64,21 @@ class PdfTemplate(FPDF):
                 The dictionary contains the actual data as well as data related to formatting and/or 
                 meta data of the file.
             filename (str): The name of the document.
-            title (str): The title of the document.
-            author (str): The name of the author.
-            subject (str): Subject matter of the document.
-            creator (str): The creator of the document.
         """
         super().__init__(orientation="P", format="A4")
-        # TODO: set the tile, author, subject and creator of the document!
-        # Adding the meta data
-        self.set_title(title)
-        self.set_author(author)
-        self.set_subject(subject)
-        self.set_creator(creator)
-        self.set_creation_date(datetime.now())
+        # Start loading and setting the correct data
         self.load_fonts()
         self.set_typography()
         self.add_page()
         self.filename = filename
-        self.doc_data = elements
+        self.blocks = elements
     
+    def footer(self) -> None:
+        y = self.HEIGHT - self.my
+        self.set_y(y)
+        self.render_text([f"Seite {self.page_no()} von {{nb}}"], size=8, style="B", align="R")
+        self.set_typography()
+
     """
     Here, we provide some basic functions / properties of the class
     that can later on be utilized such as the document height and width 
@@ -172,6 +174,81 @@ class PdfTemplate(FPDF):
             self.set_text_color(*color)
         self.set_font(family=family, style=style, size=size)
 
+    def render_line(
+            self, 
+            x1: float|None=None, 
+            y1: float|None=None, 
+            x2: float|None=None, 
+            y2: float|None=None, 
+            w: float|None=0.1, 
+            color: tuple|None=TailwindColors.SLATE_900.value
+        ) -> None:
+        """
+        Renders a line with given color and width.
+        Args:
+            x1 (float): Starting x coordinate of the line.
+            y1 (float): Starting y coordinate of the line.
+            x2 (float): Ending x coordinate of the line.
+            y2 (float): Ending y coordinate of the line.
+            w (float): The width (height) of the line.
+            color (tuple): The color of the line.
+        """
+        if x2 is None:
+            x2 = x1
+        if y2 is None:
+            y2 = y1
+        p_c, p_w = self.draw_color, self.line_width
+        self.set_draw_color(color)
+        self.set_line_width(w)
+        self.line(x1, y1, x2, y2)
+        self.set_draw_color(p_c)
+        self.set_line_width(p_w)
+
+    def render_formatting_data(
+            self,
+            line_height: float=1.4,
+            font_family: str="Roboto",
+            font_style: str="",
+            font_size: float=10,
+            font_color: tuple=TailwindColors.SLATE_800.value,
+            mx: float=23,
+            my: float=10
+        ) -> None:
+        """
+        Takes as input formatting data such as the default typography, margins and paddings.
+        Args:
+            line_height (float): Default value for all line_heights.
+            font_family (str): Value for the font family.
+            font_style (str): Value for the formatting of the font.
+            font_size (float): Value (in points) for the font size.
+            font_color (tuple): Color of the font.
+            mx (float): Value for the left and right margin.
+            my (float): Value for the top and bottom margin.
+        """
+        self.set_typography(font_family, font_style, font_size, font_color)
+        self.mx = mx
+        self.my = my
+        self.set_margin(my)
+        self.set_left_margin(mx)
+        self.set_right_margin(mx)
+        self.default_line_height_multiplicator = line_height
+
+    def render_meta_data(self, title: str="", author: str="", subject: str="", creator: str="") -> None:
+        """
+        Takes as argument the meta data of the document and sets them.
+        Args:
+            title (str): The title of the document.
+            author (str): The name of the author.
+            subject (str): Subject matter of the document.
+            creator (str): The creator of the document.
+        """
+        # Adding the meta data
+        self.set_title(title)
+        self.set_author(author)
+        self.set_subject(subject)
+        self.set_creator(creator)
+        self.set_creation_date(datetime.now())
+
     def render_signature_area(
             self, 
             w: float=60, 
@@ -217,6 +294,10 @@ class PdfTemplate(FPDF):
             y: float|None=None, 
             w: float=0,
             align: str="L", 
+            separator: str="•",
+            one_line: bool=False,
+            pt: float=0,
+            pb: float=0,
             **kwargs,
         ) -> None:
         """
@@ -229,6 +310,9 @@ class PdfTemplate(FPDF):
             align (str): The alignment of the text. 
                 For more information check out the documentation: 
                 https://py-pdf.github.io/fpdf2/fpdf/enums.html#fpdf.enums.Align
+            separator (str): A string which can be used to seperate the items or the `lines` argument.
+                Only takes action, if the flag one_line is set.
+            one_line (bool): A boolean flag, to render the entire content in one line.
             kwrags (typography): Provide values for the typography such as family, style, size and color.
         """
         self.set_typography(**kwargs)
@@ -236,15 +320,37 @@ class PdfTemplate(FPDF):
             x = x if x is not None else self.get_x()
             y = y if y is not None else self.get_y()
             self.set_xy(x,y)
-        for ln in lines:
+
+        self.render_next_line(self.get_y() + pt)
+        if one_line:
+            ln = f" {separator} ".join(lines)
             self.multi_cell(w=w, h=self.line_height, text=ln, new_x=XPos.LEFT, new_y=YPos.NEXT, align=align)
-        self.render_next_line()
+        else:
+            for ln in lines:
+                self.multi_cell(w=w, h=self.line_height, text=ln, new_x=XPos.LEFT, new_y=YPos.NEXT, align=align)
+        # self.render_next_line()
+        self.render_next_line(self.get_y() + pb)
         self.set_typography()
+
+    def render_cell(self, bg_color: tuple=(255,255,255), **kwargs: dict) -> None:
+        """
+        If given, applies customized settings for each cell such as typography, bg color or something else.
+        Args:
+            bg_color (tuple): The background color of the current cell.
+            kwargs (dict): Typography props.
+        """
+        self.set_fill_color(bg_color)
+        self.set_typography(**kwargs)
 
     def render_table(
             self, 
             table_items: list,
             v_align=VAlign.T,
+            line_color: tuple=(0,0,0),
+            line_width: float=0.2,
+            pt: float=0,
+            pb: float=0,
+            cell_formats: dict={},
             **kwargs,
         ) -> None:
         """
@@ -252,22 +358,222 @@ class PdfTemplate(FPDF):
         For more information about the table in fpdf2, checkout the following documentation:
             https://py-pdf.github.io/fpdf2/Tables.html
         """
+        self.render_next_line(self.get_y() + pt)
         if "line_height" not in kwargs:
             kwargs["line_height"] = self.line_height
-        with self.table() as table:
+        kwargs["v_align"] = v_align
+        prev_line_color, prev_line_width = self.draw_color, self.line_width
+        self.set_draw_color(line_color)
+        self.set_line_width(line_width)
+
+        with self.table(**kwargs) as table:
             for row_index, data_row in enumerate(table_items):
                 row = table.row()
                 for cell_index, datum in enumerate(data_row):
+                    key = f"{row_index}.{cell_index}"
+                    if key in cell_formats:
+                        args = cell_formats[key]
+                        self.render_cell(**args)
                     row.cell(datum)
+                    if key in cell_formats:
+                        self.render_cell()
+        self.set_draw_color(prev_line_color)
+        self.set_line_width(prev_line_width)
+        self.render_next_line(self.get_y() + pb)
 
-    """
-    Here, we provide some custom functionalities for all extending documents.
-    The functionalities includes formatting, content blocks and more.
-    """
+    def render(self, content: dict, formats: dict|None=None) -> None:
+        """
+        Based on the `blocks`, this function takes the content we want to fill and inserts the content
+        to their corresponding positions.
+        After rendering, this function also creates the pdf file and stores it under the `filename` name.
+        """
+        if formats is not None:
+            self.render_formatting_data(**formats)
+        else:
+            self.render_formatting_data()
 
+        for item in content:
+            type, args = item["type"], item["args"]
+            if type == "text":
+                self.render_text(**args)
+                continue
+            elif type == "line":
+                self.render_line(**args)
+                continue
+            elif type == "table":
+                self.render_table(**args)
+                continue
+        
+        self.output(self.filename)
+
+
+# invoice_template = [
+#     {
+#         "type": "text",
+#         "x1": 
+#     },
+#     {},
+#     {},
+# ]
+# formats = {
+#     "mx": 50,
+#     "my": 50
+# }
+content = [
+    {
+        "type": "line",
+        "args": {
+            "x1": 3,
+            "x2": 7,
+            "y1": 99,
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["DaumDigital", "Julius Daum", "Olshausenstr. 11", "24118 Kiel"],
+            "one_line": True,
+            "w": 80,
+            "y": 50,
+            "size": 7,
+            "color": TailwindColors.SLATE_600.value
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": [
+                "DaumDigital",
+                "Julius Daum", 
+                "Olshausenstr. 11", 
+                "24118 Kiel", 
+                "Tel: +49 (0) 1523 7702533", 
+                "daum.julius256@gmail.com", 
+                "www.daumdigital.de", 
+                "St.-Nr.: 2005403217"
+            ],
+            "x": 23,
+            "y": 10,
+            "align": "R",
+            "size": 9
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["DaumDigital", "Julius Daum", "Olshausenstr. 11", "24118 Kiel"],
+            "y": 60,
+            "w":80
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["Rechnung 230282-287"],
+            "y": 92,
+            "x": 23,
+            "size": 12,
+            "color": TailwindColors.PINK_600.value,
+            "style": "B",
+            "pb": 5
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["Vielen Dank für Ihr Vertrauen in unsere Leistungen.", "Wir erlauben uns folgendes in Rechnung zu stellen:"],
+            "pb": 5
+        }
+    },
+    {
+        "type": "table",
+        "args": {
+            "table_items": [
+                ("Beschreibung", "Einzelpreis", "Menge", "Einheit", "Summe"),
+                ("Yamaha CFX Konzertflügel\n\nBitte registrieren Sie Ihr Instrument innerhalb von 6 Monaten nach dem Kaufdatum und Sie erhalten eine Garantieverlängerung von 2 auf 5 Jahre. https://de.yamaha.com/de/support/warranty/index.", "150000,00 €", "1", "Stk.", "150000,00 €"),
+                ("Yamaha Clavinova Digitalpiano Modell: CLP - 775 Ausführung: Rosenholz", "3249,00 €", "1,00", "Stk.", "3249,00 €"),
+                # ("Hochwertige Sitzbank Ausführung: Rosenholz", "170,00 €", "1,00", "Stk.","170,00 €"),
+                # ("Notenständer - Verstellbar und klappbar", "45,00 €", "2,00", "Stk.", "90,00 €"),
+                # ("Anfertigung von maßgeschneiderten Notenständern mit eingebauter LED-Beleuchtung, ideal für Musiker, die bei schwachem Licht spielen. Inklusive 2 Jahre Garantie auf alle Teile.", "189,00 €", "1,00", "Stk.", "189,00 €"),
+                # ("Premium Klavierpflege-Set mit Reinigungsmittel, Tuch und Bürste", "30,00 €", "1,00", "Set", "30,00 €"),
+                # ("Konzertflügel-Service (Stimmen und Reinigen)", "350,00 €", "1,00", "Service", "350,00 €"),
+                # ("Handgefertigter Flügelhocker aus Mahagoni-Holz, gepolstert mit hochwertigem Lederbezug, für höchsten Sitzkomfort. Perfekt für lange Übungsstunden und Auftritte.", "299,00 €", "1,00", "Stk.", "299,00 €"),
+                # ("Transport eines Konzertflügels innerhalb Deutschlands", "500,00 €", "1,00", "Pauschal", "500,00 €"),
+                # ("Leihgabe eines Digitalpianos für 3 Monate", "600,00 €", "1,00", "Pauschal", "600,00 €"),
+                ("Mietservice für Klavierbänke (6 Monate)", "180,00 €", "6,00", "Monat", "180,00 €")
+            ],
+            "col_widths": (85, 25, 15, 15, 24),
+            "padding": (1,0,1,0),
+            "borders_layout": "HORIZONTAL_LINES",
+            # "borders_layout": "NONE",
+            "text_align": ("LEFT", "RIGHT", "CENTER", "CENTER", "RIGHT"), 
+            "cell_fill_color": TailwindColors.GRAY_50.value,
+            "pb": 5,
+            "line_color": TailwindColors.PINK_400.value,
+            # "cell_fill_mode": "ROWS",
+            # "cell_fill_mode": "EVEN_ROWS",
+            # "headings_style": FontFace(emphasis="Bold", fill_color=TailwindColors.GRAY_200.value)
+        }
+    },
+    {
+        "type": "table",
+        "args": {
+            "table_items": [
+                ("", "Zwischensumme (EUR)", "2873,11 €"),
+                ("", "19% MWSt.", "545,89 €"),
+                ("", "Individueller Rabatt", "-341,99 €"),
+                ("", "Gesamtsumme (EUR)", "3419,89 €"),
+            ],
+            "borders_layout": "NONE",
+            "first_row_as_headings": False,
+            "col_widths": (85, 39.5, 39.5),
+            "text_align": ("LEFT", "LEFT", "RIGHT"),
+            "gutter_width": 0,
+            "padding": (1,0,1,0),
+            "cell_formats": {
+                "3.1": {
+                    "bg_color": TailwindColors.PINK_600.value,
+                    "color": (255,255,255),
+                    # "style": "B",
+                },
+                "3.2": {
+                    "bg_color": TailwindColors.PINK_600.value,
+                    "color": (255,255,255),
+                    # "style": "B",
+                }
+            }, 
+            "pb": 10,
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": [
+                "Vielen Dank für Ihren Auftrag!",
+                "In dieser Rechnung ist gemäß §19(1) UStG keine Umsatzsteuer enthalten.",
+            ],
+            "pb": 20
+        }
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["Bitte nutzen Sie für die Überweisung folgende Daten:"],
+            "y": 260,
+            "style": "B"
+        },
+    },
+    {
+        "type": "text",
+        "args": {
+            "lines": ["Institut: C24 Bank", "IBAN: DE08 2501 0030 0000 2893 04", "Inhaber: Julius Daum", "BIC: DEXXXX"],
+        },
+    },
+]
 
 if __name__ == "__main__":
     pdf = PdfTemplate(filename="template.pdf")
-    pdf.render_text(["Hello World"])
-    pdf.render_table(table_items=(("Name", "Preis", "Stück"), ("MacBook Pro M1", "1400 €", "3"), ("Sprottenwasser", "1.45 €", "9"),))
-    pdf.output(pdf.filename)
+    pdf.render(content)
+    # pdf.render_text(["Hello World"])
+    # pdf.render_table(table_items=(("Name", "Preis", "Stück"), ("MacBook Pro M1", "1400 €", "3"), ("Sprottenwasser", "1.45 €", "9"),))
+    # pdf.render(pdf.filename)
