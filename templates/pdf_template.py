@@ -3,50 +3,45 @@ from fpdf import FPDF, XPos, YPos, Template, FontFace
 from fpdf.enums import VAlign
 from colors import TailwindColors
 from datetime import datetime
+from typing import List
 
 
-pdf_document = {
-    "meta": {},
-    "formatting": {
-        "line_height": 1.2,
+formats = {
+    "mx": 23,
+    "my": 10,
+    "pf": 10,
+    "ph": 10,
+    "line_height": 1.4,
+    "primary_color": (79, 70, 229),
+    "secondary_color": (71, 85, 105),
+    "primary_contrast_color": (255,255,255),
+    "typography": {
+        "family": "Roboto",
+        "style": "",
+        "size": 10,
+        "color": (30, 41, 59)
+    },
+    "footer": {
+        "show_page_number": True,
+        "align": "R",
+        "show_on_first_page": True,
         "typography": {
-            "family": "Roboto",
-            "style": "",
-            "size": 12,
-            "color": None
-        },
-        "footer": {
-            "show_page_number": True,
-            "page_number_align": "C",
-            "page_number_on_first_page": False,
-            "page_number_typography": {},
-        },
-        "fold_marks": [
-            {
-                "y": 99,
-                "pl": 3,
-                "color": None,
-                "length": 5
-            }
-        ]
-    }
+            "style": "B"
+        }
+    },
+    "fold_marks": [
+        {
+            "y": 99,
+            "pl": 3,
+            "color": (30, 41, 59),
+            "length": 5
+        }
+    ]
 }
 
-class Typography:
-    family: str
-    size: float
-    style: str
-    color: tuple
 
 
-class TemplateItem:
-    name: str 
-    type: str   #  T, L, I, B, 
-    typography: Typography
-
-
-
-class PdfTemplate(FPDF):
+class PdfTemplateManager(FPDF):
     """
     For our purpose, its not enough to use the built-in template engine.
     Furthermore, we need to use customized elements such as tables and much more.
@@ -66,17 +61,28 @@ class PdfTemplate(FPDF):
             filename (str): The name of the document.
         """
         super().__init__(orientation="P", format="A4")
+        # Loading the default formats into this template
+        self.formats = formats
         # Start loading and setting the correct data
         self.load_fonts()
         self.set_typography()
         self.add_page()
         self.filename = filename
         self.blocks = elements
+        self.set_auto_page_break(True, self.marginY + self.paddingFooter)
     
     def footer(self) -> None:
+        if not self.formats["footer"]["show_page_number"]:
+            return
+        
         y = self.HEIGHT - self.my
         self.set_y(y)
-        self.render_text([f"Seite {self.page_no()} von {{nb}}"], size=8, style="B", align="R")
+        self.render_text(
+            [f"Seite {self.page_no()} von {{nb}}"], 
+            size=8, 
+            style=self.formats["footer"]["typography"]["style"], 
+            align=self.formats["footer"]["align"]
+        )
         self.set_typography()
 
     """
@@ -96,8 +102,36 @@ class PdfTemplate(FPDF):
         return 210
     
     @property
+    def marginX(self) -> float:
+        return self.formats["mx"]
+
+    @property
+    def marginY(self) -> float:
+        return self.formats["my"]
+
+    @property
+    def paddingHeader(self) -> float:
+        return self.formats["ph"]
+
+    @property
+    def paddingFooter(self) -> float:
+        return self.formats["pf"]
+    
+    @property
     def line_height(self) -> float:
-        return self.font_size * self.default_line_height_multiplicator
+        return self.font_size * self.formats["line_height"]
+    
+    @property
+    def primary_color(self) -> tuple:
+        return self.formats["primary_color"]
+    
+    @property
+    def primary_contrast_color(self) -> tuple:
+        return self.formats["primary_color"]
+
+    @property
+    def secondary_color(self) -> tuple:
+        return self.formats["secondary_color"]
 
     # ==== Utils ====
     def load_fonts(self) -> None:
@@ -160,7 +194,7 @@ class PdfTemplate(FPDF):
         self.set_draw_color(prev_line_color)
         self.set_line_width(prev_line_width)
     
-    def set_typography(self, family: str="Roboto", style: str="", size: float=10, color: tuple=TailwindColors.SLATE_800.value) -> None:
+    def set_typography(self, family: str="Roboto", style: str="", size: float=10, color: tuple|None=None) -> None:
         """
         This function leverages the built-in `set_font` and `set_text_color` functions to set directly all values at once.
         Args:
@@ -172,6 +206,8 @@ class PdfTemplate(FPDF):
         """
         if color is not None:
             self.set_text_color(*color)
+        else:
+            self.set_text_color(*self.formats["typography"]["color"])
         self.set_font(family=family, style=style, size=size)
 
     def render_line(
@@ -342,6 +378,65 @@ class PdfTemplate(FPDF):
         self.set_fill_color(bg_color)
         self.set_typography(**kwargs)
 
+    def __estimate_number_of_table_rows(self, items: List[tuple], col_widths: tuple=None) -> int:
+        """
+        Based on given parameters, this function estimates the number of rows of our table.
+        The number of rows is the number, which is actually printed on the pdf document.
+        Args:
+            items (list): A nested list of table items, where the entire list represents all rows
+                and each item inside the nested lists represents a single cell of the table.
+            col_widths (tuple): Optional tuple containing the splitting for each column of the table.
+        """
+        num_of_items = len(items)
+        if col_widths is None:
+            col_widths = (self.WIDTH - self.l_margin - self.r_margin) / num_of_items
+        # Using temporary values for the x and y to compute the actual number of lines later on
+        tmp_x, tmp_y = self.get_x(), self.get_y()
+        # Also holding a maximum y value
+        max_y = tmp_y
+        num_of_rows = 0
+        with self.offset_rendering() as dummy:
+            for row in items:
+                for index, col in enumerate(row):
+                    # Here, we iterate over each cell of the table and use the dummy to render them all
+                    # at the very beginning of the current line.
+                    # When some cell extends the current maximum (has more than one line), it updates the 
+                    # maximum. Otherwise, it does not.
+                    dummy.set_x(tmp_x)
+                    dummy.set_y(tmp_y)
+                    dummy.multi_cell(w=col_widths[index], text=col, h=self.line_height)
+
+                    if max_y < dummy.get_y():
+                        max_y = dummy.get_y()
+                # Add the estimated number of rows to the total number
+                num_of_rows += (max_y - tmp_y) / self.line_height
+                tmp_y = max_y
+        return int(round(num_of_rows))
+
+    def estimate_table_height(
+            self, 
+            table_items: list,
+            padding: tuple=(0,0,0,0), 
+            gutter_height: float=0, 
+            col_widths: tuple|None=None,
+            **kwargs: dict
+        ) -> float:
+        """
+        This function calculates the height of a table.
+        This function can be used to make sure, that some tables are renderd on the same page.
+        Args:
+            num_of_items (int): The number of table items.
+            padding (tuple): Optional value for padding of each cell. (Top, right, bottom, left).
+            gutter_height (float): Optional vertical space between rows.
+        """
+        num_of_lines = self.__estimate_number_of_table_rows(table_items, col_widths)
+        # Use the current y value as starting point and add the top and bottom padding
+        height = self.get_y()
+        height += num_of_lines * (self.line_height)
+        height += len(table_items) * (padding[0] + padding[2])
+        height += num_of_lines * gutter_height
+        return height
+
     def render_table(
             self, 
             table_items: list,
@@ -350,6 +445,7 @@ class PdfTemplate(FPDF):
             line_width: float=0.2,
             pt: float=0,
             pb: float=0,
+            unbreakable: bool=False,
             cell_formats: dict={},
             **kwargs,
         ) -> None:
@@ -366,6 +462,16 @@ class PdfTemplate(FPDF):
         self.set_draw_color(line_color)
         self.set_line_width(line_width)
 
+        # If the estimated table height extends the threshold for the printable area,
+        # we force here a new page
+        table_height = self.__estimate_table_height(table_items, pt=pt, pb=pb, **kwargs)
+        print(f"Current y: {self.get_y()}; Table height: {table_height}")
+        if unbreakable and table_height >= self.HEIGHT - self.marginY - self.paddingFooter:
+            print(f"Apply page break!")
+            self.add_page()
+        
+        print(f"y-value before table: {self.get_y()}")
+        # Make the entire table unbreakable
         with self.table(**kwargs) as table:
             for row_index, data_row in enumerate(table_items):
                 row = table.row()
@@ -377,6 +483,8 @@ class PdfTemplate(FPDF):
                     row.cell(datum)
                     if key in cell_formats:
                         self.render_cell()
+        print(f"y-value after table: {self.get_y()}={table_height}")
+
         self.set_draw_color(prev_line_color)
         self.set_line_width(prev_line_width)
         self.render_next_line(self.get_y() + pb)
@@ -481,6 +589,16 @@ content = [
     {
         "type": "text",
         "args": {
+            "lines": ["Datum: 16.10.2024", "Bearbeiter: Julius Daum"],
+            "y": 92,
+            "x": 23,
+            "align": "R",
+            "pb": 5
+        }
+    },
+    {
+        "type": "text",
+        "args": {
             "lines": ["Vielen Dank für Ihr Vertrauen in unsere Leistungen.", "Wir erlauben uns folgendes in Rechnung zu stellen:"],
             "pb": 5
         }
@@ -492,14 +610,14 @@ content = [
                 ("Beschreibung", "Einzelpreis", "Menge", "Einheit", "Summe"),
                 ("Yamaha CFX Konzertflügel\n\nBitte registrieren Sie Ihr Instrument innerhalb von 6 Monaten nach dem Kaufdatum und Sie erhalten eine Garantieverlängerung von 2 auf 5 Jahre. https://de.yamaha.com/de/support/warranty/index.", "150000,00 €", "1", "Stk.", "150000,00 €"),
                 ("Yamaha Clavinova Digitalpiano Modell: CLP - 775 Ausführung: Rosenholz", "3249,00 €", "1,00", "Stk.", "3249,00 €"),
-                # ("Hochwertige Sitzbank Ausführung: Rosenholz", "170,00 €", "1,00", "Stk.","170,00 €"),
-                # ("Notenständer - Verstellbar und klappbar", "45,00 €", "2,00", "Stk.", "90,00 €"),
-                # ("Anfertigung von maßgeschneiderten Notenständern mit eingebauter LED-Beleuchtung, ideal für Musiker, die bei schwachem Licht spielen. Inklusive 2 Jahre Garantie auf alle Teile.", "189,00 €", "1,00", "Stk.", "189,00 €"),
-                # ("Premium Klavierpflege-Set mit Reinigungsmittel, Tuch und Bürste", "30,00 €", "1,00", "Set", "30,00 €"),
-                # ("Konzertflügel-Service (Stimmen und Reinigen)", "350,00 €", "1,00", "Service", "350,00 €"),
-                # ("Handgefertigter Flügelhocker aus Mahagoni-Holz, gepolstert mit hochwertigem Lederbezug, für höchsten Sitzkomfort. Perfekt für lange Übungsstunden und Auftritte.", "299,00 €", "1,00", "Stk.", "299,00 €"),
-                # ("Transport eines Konzertflügels innerhalb Deutschlands", "500,00 €", "1,00", "Pauschal", "500,00 €"),
-                # ("Leihgabe eines Digitalpianos für 3 Monate", "600,00 €", "1,00", "Pauschal", "600,00 €"),
+                ("Hochwertige Sitzbank Ausführung: Rosenholz", "170,00 €", "1,00", "Stk.","170,00 €"),
+                ("Notenständer - Verstellbar und klappbar", "45,00 €", "2,00", "Stk.", "90,00 €"),
+                ("Anfertigung von maßgeschneiderten Notenständern mit eingebauter LED-Beleuchtung, ideal für Musiker, die bei schwachem Licht spielen. Inklusive 2 Jahre Garantie auf alle Teile.", "189,00 €", "1,00", "Stk.", "189,00 €"),
+                ("Premium Klavierpflege-Set mit Reinigungsmittel, Tuch und Bürste", "30,00 €", "1,00", "Set", "30,00 €"),
+                ("Konzertflügel-Service (Stimmen und Reinigen)", "350,00 €", "1,00", "Service", "350,00 €"),
+                ("Handgefertigter Flügelhocker aus Mahagoni-Holz, gepolstert mit hochwertigem Lederbezug, für höchsten Sitzkomfort. Perfekt für lange Übungsstunden und Auftritte.", "299,00 €", "1,00", "Stk.", "299,00 €"),
+                ("Transport eines Konzertflügels innerhalb Deutschlands", "500,00 €", "1,00", "Pauschal", "500,00 €"),
+                ("Leihgabe eines Digitalpianos für 3 Monate", "600,00 €", "1,00", "Pauschal", "600,00 €"),
                 ("Mietservice für Klavierbänke (6 Monate)", "180,00 €", "6,00", "Monat", "180,00 €")
             ],
             "col_widths": (85, 25, 15, 15, 24),
@@ -524,6 +642,7 @@ content = [
                 ("", "Individueller Rabatt", "-341,99 €"),
                 ("", "Gesamtsumme (EUR)", "3419,89 €"),
             ],
+            "unbreakable": True,
             "borders_layout": "NONE",
             "first_row_as_headings": False,
             "col_widths": (85, 39.5, 39.5),
@@ -545,34 +664,34 @@ content = [
             "pb": 10,
         }
     },
-    {
-        "type": "text",
-        "args": {
-            "lines": [
-                "Vielen Dank für Ihren Auftrag!",
-                "In dieser Rechnung ist gemäß §19(1) UStG keine Umsatzsteuer enthalten.",
-            ],
-            "pb": 20
-        }
-    },
-    {
-        "type": "text",
-        "args": {
-            "lines": ["Bitte nutzen Sie für die Überweisung folgende Daten:"],
-            "y": 260,
-            "style": "B"
-        },
-    },
-    {
-        "type": "text",
-        "args": {
-            "lines": ["Institut: C24 Bank", "IBAN: DE08 2501 0030 0000 2893 04", "Inhaber: Julius Daum", "BIC: DEXXXX"],
-        },
-    },
+    # {
+    #     "type": "text",
+    #     "args": {
+    #         "lines": [
+    #             "Vielen Dank für Ihren Auftrag!",
+    #             "In dieser Rechnung ist gemäß §19(1) UStG keine Umsatzsteuer enthalten.",
+    #         ],
+    #         "pb": 20
+    #     }
+    # },
+    # {
+    #     "type": "text",
+    #     "args": {
+    #         "lines": ["Bitte nutzen Sie für die Überweisung folgende Daten:"],
+    #         "y": 260,
+    #         "style": "B"
+    #     },
+    # },
+    # {
+    #     "type": "text",
+    #     "args": {
+    #         "lines": ["Institut: C24 Bank", "IBAN: DE08 2501 0030 0000 2893 04", "Inhaber: Julius Daum", "BIC: DEXXXX"],
+    #     },
+    # },
 ]
 
 if __name__ == "__main__":
-    pdf = PdfTemplate(filename="template.pdf")
+    pdf = PdfTemplateManager(filename="template.pdf")
     pdf.render(content)
     # pdf.render_text(["Hello World"])
     # pdf.render_table(table_items=(("Name", "Preis", "Stück"), ("MacBook Pro M1", "1400 €", "3"), ("Sprottenwasser", "1.45 €", "9"),))
